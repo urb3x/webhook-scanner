@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 Main entry point for GitHub Hosted Site Searcher.
 Launches the GUI application by default, or the CLI/CMD interface if command line arguments are provided.

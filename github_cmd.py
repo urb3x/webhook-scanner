@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 Interactive and Scriptable CMD Interface for GitHub Hosted Site Searcher.
 Built using Python's standard `cmd` module with Rich/ANSI terminal formatting.
