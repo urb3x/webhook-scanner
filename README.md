@@ -36,7 +36,7 @@ python github_cmd.py
 | Command | Description | Example |
 |---|---|---|
 | `search <query>` | Search repositories with hosted sites | `search portfolio -n 20` |
-| `preset [name]` | Run a quick preset (stars, webhook, portfolio, docs, games, tools) | `preset webhook` *(runs `search "" --webhook -s updated -n 30`)* |
+| `preset [name]` | Run a quick preset (stars, webhook, portfolio, docs, games, tools) | `preset webhook` *(runs `search "" --webhook -s updated --infinite -w 20`)* |
 | `webhook [on\|off]` | Toggle Discord webhook filter | `webhook on` |
 | `details <#>` | View detailed repository & webhook info | `details 1` |
 | `open <#>` | Open hosted website in browser | `open 1` |

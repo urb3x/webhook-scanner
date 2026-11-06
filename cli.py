@@ -128,7 +128,7 @@ def run_cli(args_list=None):
             query = ""
             args.discord_webhook = True
             args.sort = "updated"
-            args.limit = 30
+            args.infinite = True
     elif not query:
         query = "stars:>100"
 

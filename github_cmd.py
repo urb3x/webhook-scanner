@@ -53,7 +53,7 @@ from cli import print_table
 
 PRESETS = {
     "1": ("stars", "stars:>1000", "Top Starred Sites"),
-    "2": ("webhook", '"" --webhook -s updated -n 30', "Discord Webhooks (All Repos, Newest Updated)"),
+    "2": ("webhook", '"" --webhook -s updated --infinite -w 20', "Discord Webhooks (All Repos, Full Speed, Infinite)"),
     "3": ("portfolio", "portfolio in:name,description", "Developer Portfolios"),
     "4": ("docs", "topic:documentation", "Technical Documentation"),
     "5": ("games", "game in:name,description,topics", "Web Games"),
@@ -251,7 +251,7 @@ class GitHubSearchCMD(cmd.Cmd):
           preset <name or #>   -> immediately runs chosen preset
         Available:
           1 / stars       : Top Starred Sites (stars:>1000)
-          2 / webhook     : search "" --webhook -s updated -n 30
+          2 / webhook     : search "" --webhook -s updated --infinite -w 20
           3 / portfolio   : Developer Portfolios
           4 / docs        : Technical Documentation
           5 / games       : Web Games
