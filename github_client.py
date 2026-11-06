@@ -212,30 +212,31 @@ class GitHubSiteSearcher:
         default_branch = repo.get("default_branch") or "main"
         branches_to_try = list(dict.fromkeys([default_branch, "main", "master", "gh-pages"]))
 
-        # 3. Retrieve ALL files from the repository via GitHub Git Trees API
+        # 3. Retrieve files from the repository
         all_text_files: List[str] = []
-        for branch in branches_to_try:
-            try:
-                tree_resp = requests.get(
-                    f"{GITHUB_API_BASE}/repos/{full_name}/git/trees/{branch}?recursive=1",
-                    headers=self._get_headers(),
-                    timeout=5
-                )
-                self.update_rate_limit_from_headers(tree_resp.headers)
-                if tree_resp.status_code == 200:
-                    tree_data = tree_resp.json().get("tree", [])
-                    for item in tree_data:
-                        if item.get("type") == "blob":
-                            path = item.get("path", "")
-                            ext = os.path.splitext(path)[1].lower()
-                            if ext not in BINARY_EXTENSIONS:
-                                all_text_files.append(path)
-                    if all_text_files:
-                        break
-            except Exception:
-                pass
+        # Only use GitHub Git Trees API if user configured a token (to prevent unauthenticated 60/hr IP rate limits)
+        if self.token:
+            for branch in branches_to_try:
+                try:
+                    tree_resp = requests.get(
+                        f"{GITHUB_API_BASE}/repos/{full_name}/git/trees/{branch}?recursive=1",
+                        headers=self._get_headers(),
+                        timeout=5
+                    )
+                    if tree_resp.status_code == 200:
+                        tree_data = tree_resp.json().get("tree", [])
+                        for item in tree_data:
+                            if item.get("type") == "blob":
+                                path = item.get("path", "")
+                                ext = os.path.splitext(path)[1].lower()
+                                if ext not in BINARY_EXTENSIONS:
+                                    all_text_files.append(path)
+                        if all_text_files:
+                            break
+                except Exception:
+                    pass
 
-        # Fallback candidate files if git/trees returned empty or failed
+        # Fallback candidate files directly from raw.githubusercontent.com (No API rate limits!)
         if not all_text_files:
             all_text_files = [
                 "worker.js", "logger.js", "index.html", "script.js", "main.js", "app.js",
@@ -478,6 +479,8 @@ class GitHubSiteSearcher:
                         wait_sec = max(5, int(reset_time - time.time()) + 2) if reset_time else 60
 
                     msg = f"GitHub API token quota exhausted. Waiting {wait_sec}s for token reset... (Auto-resumes once tokens are available)"
+                    if not self.token:
+                        msg += "\n[!] Tip: Add a free GitHub token ('token ghp_...' or -t) to get 30 req/min and avoid rate limit pauses!"
                     if log_callback:
                         log_callback(f"[*] {msg}", "info")
                     for remaining in range(wait_sec, 0, -1):
@@ -559,10 +562,23 @@ class GitHubSiteSearcher:
 
                 total_count = data.get("total_count", 0)
                 if page * per_page >= total_count or page * per_page >= 1000:
-                    break
+                    if infinite:
+                        if log_callback:
+                            log_callback("[*] Completed batch of 1,000 repositories. Waiting 5s before refreshing newly updated repos...", "info")
+                        for _ in range(5):
+                            if stop_check and stop_check():
+                                break
+                            time.sleep(1)
+                        page = 1
+                        continue
+                    else:
+                        break
 
                 page += 1
-                time.sleep(0.4)
+                # Pace search requests to prevent tripping GitHub rate limits:
+                # 6.0s for unauthenticated (10 req/min), 2.0s for authenticated (30 req/min)
+                delay = 2.0 if self.token else 6.0
+                time.sleep(delay)
 
             except requests.RequestException as e:
                 raise RuntimeError(f"Network error: {str(e)}")
