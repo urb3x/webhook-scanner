@@ -102,6 +102,7 @@ def run_cli(args_list=None):
     parser.add_argument("-i", "--infinite", "--loop", action="store_true", dest="infinite", help="Run infinitely (restarts cycle after 1000 repos, auto-waits on rate limits)")
     parser.add_argument("--no-history", action="store_true", help="Do not save or load scanned repositories history")
     parser.add_argument("--clear-history", action="store_true", help="Clear previously scanned repositories history before running")
+    parser.add_argument("-w", "--workers", "--threads", type=int, default=20, dest="workers", help="Number of concurrent multi-threaded workers (default: 20)")
     parser.add_argument("--urls-only", action="store_true", help="Output only the hosted site URLs (one per line, great for piping)")
     parser.add_argument("--open-first", action="store_true", help="Automatically open the first result in your default browser")
 
@@ -168,7 +169,8 @@ def run_cli(args_list=None):
             log_callback=on_log,
             infinite=args.infinite,
             auto_wait=True,
-            persist_history=not args.no_history
+            persist_history=not args.no_history,
+            workers=args.workers
         )
         if not args.urls_only and sys.stderr.isatty():
             sys.stderr.write("\r\033[K")

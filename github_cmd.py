@@ -163,6 +163,7 @@ class GitHubSearchCMD(cmd.Cmd):
         parser.add_argument("--webhook", action="store_true", default=self.require_webhook)
         parser.add_argument("-v", "--logs", action="store_true", default=False)
         parser.add_argument("-i", "--infinite", "--loop", action="store_true", dest="infinite", default=False)
+        parser.add_argument("-w", "--workers", "--threads", type=int, default=20, dest="workers", help="Concurrent threads")
         parser.add_argument("--all-sites", action="store_true", default=not self.only_pages)
 
         try:
@@ -216,7 +217,8 @@ class GitHubSearchCMD(cmd.Cmd):
                 log_callback=on_log,
                 infinite=args.infinite,
                 auto_wait=True,
-                persist_history=True
+                persist_history=True,
+                workers=args.workers
             )
             if sys.stderr.isatty():
                 sys.stderr.write("\r\033[K")

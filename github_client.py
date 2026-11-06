@@ -5,6 +5,7 @@ import os
 import json
 import time
 import re
+import threading
 import concurrent.futures
 from typing import Dict, List, Optional, Tuple, Callable
 import requests
@@ -332,7 +333,8 @@ class GitHubSiteSearcher:
         log_callback: Optional[Callable[[str, str], None]] = None,
         infinite: bool = False,
         auto_wait: bool = True,
-        persist_history: bool = True
+        persist_history: bool = True,
+        workers: int = 20
     ) -> List[dict]:
         """
         Searches GitHub repositories and filters those with hosted sites.
@@ -340,6 +342,7 @@ class GitHubSiteSearcher:
         log_callback(message, tag) receives live scanner lines with tag 'match' (green), 'skip' (red), or 'info'.
         If infinite is True, runs continuously across batches, resetting after 1,000 results and auto-waiting on rate limits.
         If persist_history is True, remembers scanned repositories across sessions to prevent duplicates.
+        workers: number of concurrent threads scanning repositories simultaneously for full speed.
         """
         clean_query = query.strip()
         if clean_query in ('""', "''"):
@@ -349,10 +352,82 @@ class GitHubSiteSearcher:
 
         results: List[dict] = []
         seen_repos: set = load_scanned_history() if persist_history else set()
+        seen_lock = threading.Lock()
+        results_lock = threading.Lock()
+
         if log_callback and seen_repos:
             log_callback(f"[*] Loaded {len(seen_repos):,} previously scanned repositories from history (skipping duplicate scans).", "info")
         page = 1
         per_page = 100 if infinite else min(100, max(10, max_results))
+
+        def _process_repo(item: dict) -> Optional[dict]:
+            if stop_check and stop_check():
+                return None
+
+            full_name = item.get("full_name", "")
+            if not full_name:
+                return None
+
+            with seen_lock:
+                if full_name in seen_repos:
+                    return None
+                seen_repos.add(full_name)
+                if persist_history:
+                    append_scanned_history(full_name)
+                if len(seen_repos) > 100000:
+                    seen_repos.difference_update(list(seen_repos)[:50000])
+
+            has_pages = bool(item.get("has_pages", False))
+            primary_url, pages_url, homepage_url = self.resolve_site_urls(item)
+
+            if only_pages:
+                if not has_pages:
+                    if log_callback:
+                        log_callback(f"[-] [NO PAGES] {full_name} (has_pages=false)", "skip")
+                    return None
+            else:
+                if not has_pages and (not include_homepage_only or not homepage_url):
+                    if log_callback:
+                        log_callback(f"[-] [NO HOSTED SITE] {full_name} (no pages/homepage)", "skip")
+                    return None
+
+            webhooks: List[str] = []
+            has_webhook = False
+            if require_discord_webhook:
+                if progress_callback:
+                    progress_callback(len(results), max_results, f"Checking {full_name} for Discord webhooks...")
+                webhooks = self.check_repo_for_discord_webhook(item, primary_url)
+                if not webhooks:
+                    if log_callback:
+                        log_callback(f"[-] [NO WEBHOOK] {full_name} — No Discord webhook found", "skip")
+                    return None
+                has_webhook = True
+                if log_callback:
+                    wh_sample = webhooks[0] if webhooks else "Detected"
+                    log_callback(f"[+] [FOUND WEBHOOK] {full_name} -> {wh_sample}", "match")
+            else:
+                if log_callback:
+                    log_callback(f"[+] [FOUND HOSTED SITE] {full_name} -> {primary_url}", "match")
+
+            return {
+                "id": item.get("id"),
+                "full_name": item.get("full_name"),
+                "owner": item.get("owner", {}).get("login"),
+                "name": item.get("name"),
+                "html_url": item.get("html_url"),
+                "site_url": primary_url,
+                "pages_url": pages_url,
+                "homepage_url": homepage_url,
+                "has_pages": has_pages,
+                "has_discord_webhook": has_webhook,
+                "discord_webhooks": webhooks,
+                "description": item.get("description") or "No description provided.",
+                "stars": item.get("stargazers_count", 0),
+                "forks": item.get("forks_count", 0),
+                "language": item.get("language") or "Other",
+                "updated_at": (item.get("updated_at") or "")[:10],
+                "topics": item.get("topics", [])
+            }
 
         while infinite or len(results) < max_results:
             if stop_check and stop_check():
@@ -395,23 +470,30 @@ class GitHubSiteSearcher:
                 self.update_rate_limit_from_headers(resp.headers)
 
                 if resp.status_code in (403, 429):
-                    reset_time = self.last_rate_limit.get("reset", 0)
-                    wait_sec = max(5, int(reset_time - time.time()) + 2) if reset_time else 60
-                    msg = f"GitHub API rate limit hit. Waiting {wait_sec}s for reset before continuing..."
+                    reset_time = int(resp.headers.get("X-RateLimit-Reset", 0)) or self.last_rate_limit.get("reset", 0)
+                    retry_after = resp.headers.get("Retry-After")
+                    if retry_after and retry_after.isdigit():
+                        wait_sec = int(retry_after) + 2
+                    else:
+                        wait_sec = max(5, int(reset_time - time.time()) + 2) if reset_time else 60
+
+                    msg = f"GitHub API token quota exhausted. Waiting {wait_sec}s for token reset... (Auto-resumes once tokens are available)"
                     if log_callback:
                         log_callback(f"[*] {msg}", "info")
-                    if auto_wait or infinite:
-                        for _ in range(wait_sec):
-                            if stop_check and stop_check():
-                                break
-                            time.sleep(1)
-                        continue
-                    raise RuntimeError(msg)
+                    for remaining in range(wait_sec, 0, -1):
+                        if stop_check and stop_check():
+                            break
+                        if remaining % 15 == 0 or remaining <= 5:
+                            if log_callback:
+                                log_callback(f"[*] Tokens reset in {remaining}s...", "info")
+                        time.sleep(1)
+                    if log_callback:
+                        log_callback("[+] Token quota refreshed! Resuming scan at full speed...", "match")
+                    continue
 
                 if resp.status_code == 422:
                     err_json = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
                     err_msg = err_json.get("message", resp.text)
-                    # GitHub 1,000 search result ceiling reached
                     if "1000" in err_msg:
                         if infinite:
                             if log_callback:
@@ -451,95 +533,29 @@ class GitHubSiteSearcher:
                         break
 
                 if log_callback:
-                    log_callback(f"[*] Page {page}: processing {len(items)} repositories from GitHub...", "info")
+                    log_callback(f"[*] Page {page}: multi-thread scanning {len(items)} repositories with {workers} threads...", "info")
 
-                for item in items:
-                    if stop_check and stop_check():
-                        break
-
-                    full_name = item.get("full_name", "")
-                    if full_name in seen_repos:
-                        continue
-                    seen_repos.add(full_name)
-                    if persist_history:
-                        append_scanned_history(full_name)
-                    if len(seen_repos) > 100000:
-                        seen_repos = set(list(seen_repos)[-50000:])
-                    has_pages = bool(item.get("has_pages", False))
-                    primary_url, pages_url, homepage_url = self.resolve_site_urls(item)
-
-                    # Filter condition:
-                    # If only_pages is True, repo MUST have GitHub Pages (has_pages == True)
-                    # If only_pages is False, repo can either have GitHub Pages OR a custom homepage
-                    if only_pages:
-                        if not has_pages:
-                            if log_callback:
-                                log_callback(f"[-] [NO PAGES] {full_name} (has_pages=false)", "skip")
-                            continue
-                    else:
-                        if not has_pages and (not include_homepage_only or not homepage_url):
-                            if log_callback:
-                                log_callback(f"[-] [NO HOSTED SITE] {full_name} (no pages/homepage)", "skip")
-                            continue
-
-                    # If Discord webhook filter is enabled, check if repo contains a webhook
-                    webhooks: List[str] = []
-                    has_webhook = False
-                    if require_discord_webhook:
+                actual_workers = max(1, min(workers, len(items)))
+                with concurrent.futures.ThreadPoolExecutor(max_workers=actual_workers) as executor:
+                    futures = [executor.submit(_process_repo, item) for item in items]
+                    for future in concurrent.futures.as_completed(futures):
                         if stop_check and stop_check():
                             break
-                        if progress_callback:
-                            progress_callback(
-                                len(results),
-                                max_results,
-                                f"Checking {full_name} for Discord webhooks..."
-                            )
-                        webhooks = self.check_repo_for_discord_webhook(item, primary_url)
-                        if not webhooks:
-                            if log_callback:
-                                log_callback(f"[-] [NO WEBHOOK] {full_name} — No Discord webhook found", "skip")
-                            continue
-                        has_webhook = True
-                        if log_callback:
-                            wh_sample = webhooks[0] if webhooks else "Detected"
-                            log_callback(f"[+] [FOUND WEBHOOK] {full_name} -> {wh_sample}", "match")
-                    else:
-                        if log_callback:
-                            log_callback(f"[+] [FOUND HOSTED SITE] {full_name} -> {primary_url}", "match")
-
-                    item_info = {
-                        "id": item.get("id"),
-                        "full_name": item.get("full_name"),
-                        "owner": item.get("owner", {}).get("login"),
-                        "name": item.get("name"),
-                        "html_url": item.get("html_url"),
-                        "site_url": primary_url,
-                        "pages_url": pages_url,
-                        "homepage_url": homepage_url,
-                        "has_pages": has_pages,
-                        "has_discord_webhook": has_webhook,
-                        "discord_webhooks": webhooks,
-                        "description": item.get("description") or "No description provided.",
-                        "stars": item.get("stargazers_count", 0),
-                        "forks": item.get("forks_count", 0),
-                        "language": item.get("language") or "Other",
-                        "updated_at": (item.get("updated_at") or "")[:10],
-                        "topics": item.get("topics", [])
-                    }
-                    results.append(item_info)
-
-                    if progress_callback:
-                        if require_discord_webhook:
-                            progress_callback(
-                                len(results),
-                                max_results,
-                                f"Found Discord webhook in {item.get('full_name')} ({len(results)}/{max_results})..."
-                            )
-                        else:
-                            progress_callback(len(results), max_results, f"Found {len(results)} matching hosted sites...")
-
-                    if len(results) >= max_results:
-                        break
+                        try:
+                            item_res = future.result()
+                            if item_res:
+                                with results_lock:
+                                    results.append(item_res)
+                                    if progress_callback:
+                                        progress_callback(
+                                            len(results),
+                                            max_results,
+                                            f"Found match: {item_res['full_name']} ({len(results)}/{max_results})..."
+                                        )
+                                if not infinite and len(results) >= max_results:
+                                    break
+                        except Exception:
+                            pass
 
                 total_count = data.get("total_count", 0)
                 if page * per_page >= total_count or page * per_page >= 1000:
