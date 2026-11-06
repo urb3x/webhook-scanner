@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyInstaller build artifacts
+build/
+*.toc
+*.pkg
+
+# Environments
+.env
+.venv
+env/
+venv/
