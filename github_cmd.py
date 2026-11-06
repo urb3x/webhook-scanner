@@ -160,6 +160,7 @@ class GitHubSearchCMD(cmd.Cmd):
         parser.add_argument("-s", "--sort", choices=["stars", "forks", "updated", "best_match"], default=self.default_sort)
         parser.add_argument("--webhook", action="store_true", default=self.require_webhook)
         parser.add_argument("-v", "--logs", action="store_true", default=False)
+        parser.add_argument("-i", "--infinite", "--loop", action="store_true", dest="infinite", default=False)
         parser.add_argument("--all-sites", action="store_true", default=not self.only_pages)
 
         try:
@@ -209,11 +210,16 @@ class GitHubSearchCMD(cmd.Cmd):
                 max_results=args.limit,
                 only_pages=only_pages,
                 require_discord_webhook=webhook_filter,
-                progress_callback=on_progress if not show_logs else None,
-                log_callback=on_log
+                progress_callback=on_progress if not (show_logs or args.infinite) else None,
+                log_callback=on_log,
+                infinite=args.infinite,
+                auto_wait=True
             )
             if sys.stderr.isatty():
                 sys.stderr.write("\r\033[K")
+        except KeyboardInterrupt:
+            print("\n\n\033[1;93m[*] Infinite scan stopped by user (Ctrl+C).\033[0m")
+            results = self.searcher.last_results if hasattr(self.searcher, "last_results") else []
         except Exception as e:
             print(f"\n[!] Error during search: {e}")
             return

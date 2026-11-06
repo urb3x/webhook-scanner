@@ -293,12 +293,15 @@ class GitHubSiteSearcher:
         require_discord_webhook: bool = False,
         stop_check: Optional[Callable[[], bool]] = None,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
-        log_callback: Optional[Callable[[str, str], None]] = None
+        log_callback: Optional[Callable[[str, str], None]] = None,
+        infinite: bool = False,
+        auto_wait: bool = True
     ) -> List[dict]:
         """
         Searches GitHub repositories and filters those with hosted sites.
         If require_discord_webhook is True, only repos containing Discord webhooks are returned.
         log_callback(message, tag) receives live scanner lines with tag 'match' (green), 'skip' (red), or 'info'.
+        If infinite is True, runs continuously across batches, resetting after 1,000 results and auto-waiting on rate limits.
         """
         clean_query = query.strip()
         if clean_query in ('""', "''"):
@@ -307,18 +310,29 @@ class GitHubSiteSearcher:
             clean_query = "stars:>=0"
 
         results: List[dict] = []
+        seen_repos: set = set()
         page = 1
-        per_page = min(100, max(10, max_results))
+        per_page = 100 if infinite else min(100, max(10, max_results))
 
-        while len(results) < max_results:
+        while infinite or len(results) < max_results:
             if stop_check and stop_check():
                 break
 
             # GitHub Search API hard cap: only the first 1,000 results are accessible per query
             if (page - 1) * per_page >= 1000:
-                if log_callback:
-                    log_callback("[-] Reached GitHub Search API limit (first 1,000 results ceiling).", "info")
-                break
+                if infinite:
+                    if log_callback:
+                        log_callback("[*] Completed batch of 1,000 repositories. Waiting 10s before restarting scan cycle for newly updated repos...", "info")
+                    for _ in range(10):
+                        if stop_check and stop_check():
+                            break
+                        time.sleep(1)
+                    page = 1
+                    continue
+                else:
+                    if log_callback:
+                        log_callback("[-] Reached GitHub Search API limit (first 1,000 results ceiling).", "info")
+                    break
 
             if progress_callback:
                 progress_callback(len(results), max_results, f"Fetching page {page} from GitHub...")
@@ -342,10 +356,16 @@ class GitHubSiteSearcher:
 
                 if resp.status_code in (403, 429):
                     reset_time = self.last_rate_limit.get("reset", 0)
-                    wait_sec = max(1, int(reset_time - time.time())) if reset_time else 60
-                    msg = f"GitHub API rate limit hit. Reset in {wait_sec}s. Tip: Enter a GitHub Personal Access Token to get 30 requests/min."
+                    wait_sec = max(5, int(reset_time - time.time()) + 2) if reset_time else 60
+                    msg = f"GitHub API rate limit hit. Waiting {wait_sec}s for reset before continuing..."
                     if log_callback:
-                        log_callback(f"[!] {msg}", "skip")
+                        log_callback(f"[*] {msg}", "info")
+                    if auto_wait or infinite:
+                        for _ in range(wait_sec):
+                            if stop_check and stop_check():
+                                break
+                            time.sleep(1)
+                        continue
                     raise RuntimeError(msg)
 
                 if resp.status_code == 422:
@@ -353,9 +373,19 @@ class GitHubSiteSearcher:
                     err_msg = err_json.get("message", resp.text)
                     # GitHub 1,000 search result ceiling reached
                     if "1000" in err_msg:
-                        if log_callback:
-                            log_callback("[-] Reached GitHub Search API 1,000-result limit.", "info")
-                        break
+                        if infinite:
+                            if log_callback:
+                                log_callback("[*] Reached GitHub 1,000-result ceiling. Waiting 10s before refreshing...", "info")
+                            for _ in range(10):
+                                if stop_check and stop_check():
+                                    break
+                                time.sleep(1)
+                            page = 1
+                            continue
+                        else:
+                            if log_callback:
+                                log_callback("[-] Reached GitHub Search API 1,000-result limit.", "info")
+                            break
                     raise RuntimeError(f"GitHub API (422): {err_msg}")
 
                 if resp.status_code != 200:
@@ -366,9 +396,19 @@ class GitHubSiteSearcher:
                 data = resp.json()
                 items = data.get("items", [])
                 if not items:
-                    if log_callback:
-                        log_callback("[*] No more repositories returned by GitHub for this query.", "info")
-                    break
+                    if infinite:
+                        if log_callback:
+                            log_callback("[*] No more repositories returned on this pass. Waiting 10s before refreshing...", "info")
+                        for _ in range(10):
+                            if stop_check and stop_check():
+                                break
+                            time.sleep(1)
+                        page = 1
+                        continue
+                    else:
+                        if log_callback:
+                            log_callback("[*] No more repositories returned by GitHub for this query.", "info")
+                        break
 
                 if log_callback:
                     log_callback(f"[*] Page {page}: processing {len(items)} repositories from GitHub...", "info")
@@ -378,6 +418,11 @@ class GitHubSiteSearcher:
                         break
 
                     full_name = item.get("full_name", "")
+                    if full_name in seen_repos:
+                        continue
+                    seen_repos.add(full_name)
+                    if len(seen_repos) > 50000:
+                        seen_repos = set(list(seen_repos)[-25000:])
                     has_pages = bool(item.get("has_pages", False))
                     primary_url, pages_url, homepage_url = self.resolve_site_urls(item)
 

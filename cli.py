@@ -94,6 +94,7 @@ def run_cli(args_list=None):
     parser.add_argument("-j", "--export-json", type=str, help="Export results to a JSON file")
     parser.add_argument("-v", "--logs", action="store_true", help="Show real-time colorful live scanner logs (Green matches, Red skips)")
     parser.add_argument("--logs-only", action="store_true", help="Only stream colorful live logs without displaying the final summary table")
+    parser.add_argument("-i", "--infinite", "--loop", action="store_true", dest="infinite", help="Run infinitely (restarts cycle after 1000 repos, auto-waits on rate limits)")
     parser.add_argument("--urls-only", action="store_true", help="Output only the hosted site URLs (one per line, great for piping)")
     parser.add_argument("--open-first", action="store_true", help="Automatically open the first result in your default browser")
 
@@ -152,12 +153,16 @@ def run_cli(args_list=None):
             max_results=args.limit,
             only_pages=not args.all_sites,
             require_discord_webhook=args.discord_webhook,
-            progress_callback=on_progress if not (args.logs or args.discord_webhook or args.logs_only) else None,
-            log_callback=on_log
+            progress_callback=on_progress if not (args.logs or args.discord_webhook or args.logs_only or args.infinite) else None,
+            log_callback=on_log,
+            infinite=args.infinite,
+            auto_wait=True
         )
         if not args.urls_only and sys.stderr.isatty():
             sys.stderr.write("\r\033[K")
 
+    except KeyboardInterrupt:
+        print("\n\n\033[1;93m[*] Infinite scan stopped by user (Ctrl+C).\033[0m")
     except Exception as e:
         print(f"\n[!] Error during search: {e}", file=sys.stderr)
         sys.exit(1)

@@ -61,6 +61,9 @@ python github_cmd.py "discord webhook" --webhook -s updated -n 25
 
 # Stream only the colorful scanner logs (Green for webhook found, Red for skipped)
 python cli.py "discord webhook" --discord-webhook -s updated --logs-only
+
+# Run infinitely (Continuous scanner: auto-restarts after 1000 repos, auto-waits on rate limits)
+python cli.py "" --discord-webhook -s updated --infinite --logs-only
 ```
 
 ---
