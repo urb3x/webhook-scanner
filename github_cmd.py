@@ -44,7 +44,9 @@ if sys.platform == "win32":
 from github_client import (
     GitHubSiteSearcher,
     load_saved_token,
-    save_token
+    save_token,
+    clear_scanned_history,
+    load_scanned_history
 )
 from cli import print_table
 
@@ -213,7 +215,8 @@ class GitHubSearchCMD(cmd.Cmd):
                 progress_callback=on_progress if not (show_logs or args.infinite) else None,
                 log_callback=on_log,
                 infinite=args.infinite,
-                auto_wait=True
+                auto_wait=True,
+                persist_history=True
             )
             if sys.stderr.isatty():
                 sys.stderr.write("\r\033[K")
@@ -607,6 +610,27 @@ class GitHubSearchCMD(cmd.Cmd):
         print(f"    - Search Rate Limit: {rem} / {limit} requests remaining")
         if reset_in > 0:
             print(f"    - Resets in        : {reset_in} seconds ({reset_in // 60}m {reset_in % 60}s)")
+
+    # -------------------------------------------------------------------------
+    # Command: history
+    # -------------------------------------------------------------------------
+    def do_history(self, arg: str):
+        """
+        View or manage scanned repositories history.
+        Usage:
+          history        -> displays count of repositories saved in history
+          history clear  -> reset and clear scanned history
+        """
+        clean = arg.strip().lower()
+        if clean == "clear":
+            clear_scanned_history()
+            print("[+] Scanned repository history cleared.")
+            return
+
+        hist = load_scanned_history()
+        print(f"[*] Total previously scanned repositories stored in history: {len(hist):,}")
+        print("    These repositories are automatically skipped across sessions.")
+        print("    Type 'history clear' to reset history.")
 
     # -------------------------------------------------------------------------
     # Command: clear / cls

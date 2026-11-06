@@ -8,7 +8,12 @@ import csv
 import json
 import webbrowser
 from typing import List
-from github_client import GitHubSiteSearcher, load_saved_token
+from github_client import (
+    GitHubSiteSearcher,
+    load_saved_token,
+    clear_scanned_history,
+    load_scanned_history
+)
 
 import os
 
@@ -95,10 +100,16 @@ def run_cli(args_list=None):
     parser.add_argument("-v", "--logs", action="store_true", help="Show real-time colorful live scanner logs (Green matches, Red skips)")
     parser.add_argument("--logs-only", action="store_true", help="Only stream colorful live logs without displaying the final summary table")
     parser.add_argument("-i", "--infinite", "--loop", action="store_true", dest="infinite", help="Run infinitely (restarts cycle after 1000 repos, auto-waits on rate limits)")
+    parser.add_argument("--no-history", action="store_true", help="Do not save or load scanned repositories history")
+    parser.add_argument("--clear-history", action="store_true", help="Clear previously scanned repositories history before running")
     parser.add_argument("--urls-only", action="store_true", help="Output only the hosted site URLs (one per line, great for piping)")
     parser.add_argument("--open-first", action="store_true", help="Automatically open the first result in your default browser")
 
     args = parser.parse_args(args_list)
+
+    if args.clear_history:
+        clear_scanned_history()
+        print("[+] Scanned repository history cleared.")
 
     preset_queries = {
         "stars": "stars:>1000",
@@ -156,7 +167,8 @@ def run_cli(args_list=None):
             progress_callback=on_progress if not (args.logs or args.discord_webhook or args.logs_only or args.infinite) else None,
             log_callback=on_log,
             infinite=args.infinite,
-            auto_wait=True
+            auto_wait=True,
+            persist_history=not args.no_history
         )
         if not args.urls_only and sys.stderr.isatty():
             sys.stderr.write("\r\033[K")

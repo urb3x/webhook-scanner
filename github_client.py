@@ -11,6 +11,7 @@ import requests
 
 GITHUB_API_BASE = "https://api.github.com"
 CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".github_pages_search_config.json")
+HISTORY_FILE = os.path.join(os.path.expanduser("~"), ".github_scanned_repos.txt")
 
 DISCORD_WEBHOOK_PATTERN = re.compile(
     r"https?://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/[A-Za-z0-9_\-]+/[A-Za-z0-9_\-]+[^\s\"'`;<>()\[\]]*",
@@ -59,6 +60,41 @@ def save_token(token: str) -> None:
     try:
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump({"token": token.strip()}, f)
+    except Exception:
+        pass
+
+
+def load_scanned_history() -> set:
+    """Load previously scanned repository names from user config disk file."""
+    scanned = set()
+    try:
+        if os.path.exists(HISTORY_FILE):
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                for line in f:
+                    name = line.strip()
+                    if name:
+                        scanned.add(name)
+    except Exception:
+        pass
+    return scanned
+
+
+def append_scanned_history(repo_full_name: str) -> None:
+    """Append a scanned repository to history file on disk."""
+    if not repo_full_name:
+        return
+    try:
+        with open(HISTORY_FILE, "a", encoding="utf-8") as f:
+            f.write(repo_full_name.strip() + "\n")
+    except Exception:
+        pass
+
+
+def clear_scanned_history() -> None:
+    """Clear scanned repositories history file."""
+    try:
+        if os.path.exists(HISTORY_FILE):
+            os.remove(HISTORY_FILE)
     except Exception:
         pass
 
@@ -295,13 +331,15 @@ class GitHubSiteSearcher:
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
         log_callback: Optional[Callable[[str, str], None]] = None,
         infinite: bool = False,
-        auto_wait: bool = True
+        auto_wait: bool = True,
+        persist_history: bool = True
     ) -> List[dict]:
         """
         Searches GitHub repositories and filters those with hosted sites.
         If require_discord_webhook is True, only repos containing Discord webhooks are returned.
         log_callback(message, tag) receives live scanner lines with tag 'match' (green), 'skip' (red), or 'info'.
         If infinite is True, runs continuously across batches, resetting after 1,000 results and auto-waiting on rate limits.
+        If persist_history is True, remembers scanned repositories across sessions to prevent duplicates.
         """
         clean_query = query.strip()
         if clean_query in ('""', "''"):
@@ -310,7 +348,9 @@ class GitHubSiteSearcher:
             clean_query = "stars:>=0"
 
         results: List[dict] = []
-        seen_repos: set = set()
+        seen_repos: set = load_scanned_history() if persist_history else set()
+        if log_callback and seen_repos:
+            log_callback(f"[*] Loaded {len(seen_repos):,} previously scanned repositories from history (skipping duplicate scans).", "info")
         page = 1
         per_page = 100 if infinite else min(100, max(10, max_results))
 
@@ -421,8 +461,10 @@ class GitHubSiteSearcher:
                     if full_name in seen_repos:
                         continue
                     seen_repos.add(full_name)
-                    if len(seen_repos) > 50000:
-                        seen_repos = set(list(seen_repos)[-25000:])
+                    if persist_history:
+                        append_scanned_history(full_name)
+                    if len(seen_repos) > 100000:
+                        seen_repos = set(list(seen_repos)[-50000:])
                     has_pages = bool(item.get("has_pages", False))
                     primary_url, pages_url, homepage_url = self.resolve_site_urls(item)
 

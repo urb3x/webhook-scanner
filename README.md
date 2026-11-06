@@ -45,6 +45,7 @@ python github_cmd.py
 | `export <csv\|json>` | Export current search results | `export csv results.csv` |
 | `token [pat]` | View or set GitHub Personal Access Token | `token ghp_yourToken` |
 | `ratelimit` | Check remaining GitHub API requests | `ratelimit` |
+| `history [clear]` | View or clear scanned repositories history | `history` or `history clear` |
 | `cls` / `clear` | Clear the console screen | `clear` |
 | `exit` / `quit` | Exit the shell | `exit` |
 
